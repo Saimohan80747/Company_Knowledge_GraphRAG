@@ -8,8 +8,21 @@ BACKEND_DIR = Path(__file__).resolve().parent
 load_dotenv(BACKEND_DIR / ".env")
 
 
-def _env(name, default=None):
+def _env(name: str, default: str | None = None) -> str | None:
     return os.getenv(name, default)
+
+
+def _env_int(name: str, default: int) -> int:
+    value = _env(name)
+    if value is None or not value.strip():
+        return default
+
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{name} must be an integer; received {value!r}"
+        ) from exc
 
 
 COHERE_API_KEY = _env("COHERE_API_KEY")
@@ -28,7 +41,7 @@ PINECONE_DENSE_MODEL = _env("PINECONE_DENSE_MODEL", "llama-text-embed-v2")
 PINECONE_SPARSE_MODEL = _env(
     "PINECONE_SPARSE_MODEL", "pinecone-sparse-english-v0"
 )
-PINECONE_DIMENSION = int(_env("PINECONE_DIMENSION", "1024"))
+PINECONE_DIMENSION = _env_int("PINECONE_DIMENSION", 1024)
 PINECONE_CLOUD = _env("PINECONE_CLOUD", "aws")
 PINECONE_REGION = _env("PINECONE_REGION", "us-east-1")
 
@@ -36,19 +49,22 @@ NEO4J_URI = _env("NEO4J_URI")
 NEO4J_USER = _env("NEO4J_USER")
 NEO4J_PASSWORD = _env("NEO4J_PASSWORD")
 NEO4J_VECTOR_INDEX = _env("NEO4J_VECTOR_INDEX", "all_nodes_embedding_index")
-NEO4J_VECTOR_DIMENSION = int(_env("NEO4J_VECTOR_DIMENSION", "384"))
-NEO4J_MAX_HOPS = int(_env("NEO4J_MAX_HOPS", "2"))
-NEO4J_TOP_K = int(_env("NEO4J_TOP_K", "3"))
+NEO4J_VECTOR_DIMENSION = _env_int("NEO4J_VECTOR_DIMENSION", 384)
+NEO4J_MAX_HOPS = _env_int("NEO4J_MAX_HOPS", 2)
+NEO4J_TOP_K = _env_int("NEO4J_TOP_K", 3)
 
-CHUNK_SIZE = int(_env("CHUNK_SIZE", "2000"))
-CHUNK_OVERLAP = int(_env("CHUNK_OVERLAP", "300"))
-RETRIEVAL_TOP_K = int(_env("RETRIEVAL_TOP_K", "5"))
+CHUNK_SIZE = _env_int("CHUNK_SIZE", 2000)
+CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 300)
+RETRIEVAL_TOP_K = _env_int("RETRIEVAL_TOP_K", 5)
 
 API_CORS_ORIGINS = [
     origin.strip()
-    for origin in _env(
-        "API_CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
+    for origin in (
+        _env(
+            "API_CORS_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173",
+        )
+        or ""
     ).split(",")
     if origin.strip()
 ]

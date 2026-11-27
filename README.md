@@ -39,24 +39,256 @@ first_rag_project/
 
 ```mermaid
 flowchart LR
-    U[Employee or intern] --> UI[React and Vite chat]
-    UI --> API[FastAPI]
-    CRUD[Streamlit CSV importer] --> API
+    U([Employee or intern]):::actor
+    HR([HR / knowledge maintainer]):::actor
 
-    API --> ROUTER{Question router}
-    ROUTER -->|Document question| PINECONE[Pinecone hybrid retrieval]
-    ROUTER -->|Company entities or relationships| NEO4J[Neo4j graph and vector search]
-    ROUTER -->|Needs both| PINECONE
-    ROUTER -->|Needs both| NEO4J
-    PINECONE --> COHERE[Cohere answer generation]
-    NEO4J --> COHERE
-    COHERE --> API
-    API --> UI
+    subgraph CLIENTS["Client applications"]
+        UI["React + Vite<br/>Chat interface"]:::client
+        CRUD["Streamlit<br/>CSV graph importer"]:::client
+    end
 
-    API -->|POST /pipeline| INGEST[Extract, clean, and chunk]
-    INGEST --> STORAGE[Supabase Storage and document metadata]
-    INGEST --> PINECONE
-    API --> CHAT[Supabase chat sessions and messages]
+    subgraph SERVICES["Backend services"]
+        API["FastAPI<br/>REST API"]:::service
+        ROUTER{"Question<br/>router"}:::decision
+        INGEST["File pipeline<br/>extract → clean → chunk"]:::process
+        ANSWER["Cohere<br/>answer generation"]:::ai
+    end
+
+    subgraph STORES["Data services"]
+        SUPA[("Supabase<br/>files + chat history")]:::store
+        PINE[("Pinecone<br/>dense + sparse vectors")]:::store
+        NEO[("Neo4j<br/>company graph + vectors")]:::store
+    end
+
+    U --> UI
+    UI -->|"Questions / uploads"| API
+    API -->|"Answers / upload status"| UI
+    HR --> CRUD
+    CRUD -->|"CSV nodes + relationships"| API
+    API --> ROUTER
+    ROUTER -->|"Document route"| PINE
+    ROUTER -->|"Graph route"| NEO
+    ROUTER -->|"Both"| PINE
+    ROUTER -->|"Both"| NEO
+    PINE -->|"Retrieved chunks"| ANSWER
+    NEO -->|"Nodes + relationship context"| ANSWER
+    ANSWER --> API
+    API -->|"Save / read chat"| SUPA
+    API -->|"Upload request"| INGEST
+    INGEST -->|"Store original + metadata"| SUPA
+    INGEST -->|"Upsert chunk vectors"| PINE
+    API -->|"Import graph records"| NEO
+
+    classDef actor fill:#fff3bf,stroke:#e67700,color:#5f3b00,stroke-width:2px
+    classDef client fill:#d0ebff,stroke:#1971c2,color:#12344d,stroke-width:2px
+    classDef service fill:#d3f9d8,stroke:#2b8a3e,color:#173d20,stroke-width:2px
+    classDef process fill:#e5dbff,stroke:#7048e8,color:#30215e,stroke-width:2px
+    classDef decision fill:#fff0f6,stroke:#c2255c,color:#601a36,stroke-width:2px
+    classDef ai fill:#ffe8cc,stroke:#e8590c,color:#612b08,stroke-width:2px
+    classDef store fill:#e6fcf5,stroke:#087f5b,color:#123c31,stroke-width:2px
+    style CLIENTS fill:#f8f9fa,stroke:#adb5bd,stroke-width:1px
+    style SERVICES fill:#f3f0ff,stroke:#9775fa,stroke-width:2px
+    style STORES fill:#e6fcf5,stroke:#38a169,stroke-width:2px
+```
+
+The colors distinguish people, user interfaces, backend processes, AI generation, and persistent data stores. The diagram shows logical integrations; it does not imply that each service is deployed in a separate process.
+
+## Data flow diagrams (DFD)
+
+### Level 0 — Company knowledge assistant
+
+This context diagram treats the application as one process and shows its external actors and data stores.
+
+```mermaid
+flowchart LR
+    EMP([Employee / intern]):::external
+    ADMIN([HR / maintainer]):::external
+    APP(["0. Company knowledge assistant<br/>FastAPI + retrieval + answer generation"]):::process
+    DOCS[("D1: Supabase<br/>documents + chat")]:::store
+    VECTORS[("D2: Pinecone<br/>document vectors")]:::store
+    GRAPH[("D3: Neo4j<br/>company knowledge graph")]:::store
+
+    EMP -->|"Question, file upload"| APP
+    APP -->|"Answer, upload result"| EMP
+    ADMIN -->|"Company CSV records"| APP
+    APP -->|"Import / update entities and links"| GRAPH
+    APP -->|"Store file, metadata, conversation"| DOCS
+    APP -->|"Write and search document chunks"| VECTORS
+    DOCS -->|"Chat context / source file"| APP
+    VECTORS -->|"Relevant document chunks"| APP
+    GRAPH -->|"Relevant nodes and relationships"| APP
+
+    classDef external fill:#fff3bf,stroke:#e67700,color:#5f3b00,stroke-width:2px
+    classDef process fill:#d0ebff,stroke:#1971c2,color:#12344d,stroke-width:3px
+    classDef store fill:#e6fcf5,stroke:#087f5b,color:#123c31,stroke-width:2px
+```
+
+### Level 1 — Upload, retrieve, and answer
+
+```mermaid
+flowchart TB
+    USER([Employee / intern]):::external
+    MAINTAINER([HR / maintainer]):::external
+
+    subgraph APP["Company knowledge assistant"]
+        P1(["1.0 Accept and validate upload"]):::process
+        P1A(["1.1 Extract, clean, chunk, embed"]):::process
+        P2(["2.0 Route question"]):::process
+        P3(["3.0 Retrieve document context"]):::process
+        P4(["4.0 Retrieve graph context"]):::process
+        P5(["5.0 Generate and save answer"]):::process
+        P6(["6.0 Import company CSV"]):::process
+    end
+
+    D1[("D1: Supabase<br/>files, metadata, chat")]:::store
+    D2[("D2: Pinecone<br/>dense + sparse chunk vectors")]:::store
+    D3[("D3: Neo4j<br/>entities + relationships")]:::store
+
+    USER -->|"Document upload"| P1
+    P1 -->|"Original file + metadata"| D1
+    P1 -->|"File for processing"| P1A
+    P1A -->|"Chunk vectors + source metadata"| D2
+    P1 -->|"Upload status"| USER
+
+    USER -->|"Question + session id"| P2
+    D1 -->|"Prior chat when applicable"| P2
+    P2 -->|"Document or both route"| P3
+    P2 -->|"Graph or both route"| P4
+    P3 -->|"Search query"| D2
+    D2 -->|"Top matching chunks"| P3
+    P4 -->|"Vector and relationship lookup"| D3
+    D3 -->|"Relevant nodes and links"| P4
+    P3 -->|"Retrieved document context"| P5
+    P4 -->|"Retrieved graph context"| P5
+    P2 -->|"Question and selected context"| P5
+    P5 -->|"Answer + conversation record"| D1
+    P5 -->|"Answer"| USER
+
+    MAINTAINER -->|"Node / relationship CSV"| P6
+    P6 -->|"MERGE graph records"| D3
+    P6 -->|"Import result"| MAINTAINER
+
+    classDef external fill:#fff3bf,stroke:#e67700,color:#5f3b00,stroke-width:2px
+    classDef process fill:#d3f9d8,stroke:#2b8a3e,color:#173d20,stroke-width:2px
+    classDef store fill:#e6fcf5,stroke:#087f5b,color:#123c31,stroke-width:2px
+    style APP fill:#f8f9fa,stroke:#495057,stroke-width:2px
+```
+
+## UML diagrams
+
+### Question-answering sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Employee / intern
+    participant UI as React chat
+    participant API as FastAPI /prompt
+    participant Router as Cohere router
+    participant Pine as Pinecone
+    participant Neo as Neo4j
+    participant LLM as Cohere answer model
+    participant DB as Supabase chat store
+
+    rect rgb(230, 245, 255)
+        User->>UI: Ask company question
+        UI->>API: POST /prompt (question, session_id)
+        API->>Router: Classify retrieval route
+        Router-->>API: document_retrieval / knowledge_graph / both
+    end
+
+    alt Document retrieval or both
+        API->>Pine: Embed query and search dense + sparse vectors
+        Pine-->>API: Relevant document chunks and metadata
+    end
+
+    alt Knowledge graph or both
+        API->>Neo: Vector-search entities and traverse relationships
+        Neo-->>API: Relevant nodes and graph context
+    end
+
+    rect rgb(235, 255, 240)
+        API->>LLM: Question plus retrieved context
+        LLM-->>API: Generated answer
+        API->>DB: Save question and answer
+        DB-->>API: Session id
+        API-->>UI: Answer and session id
+        UI-->>User: Display answer
+    end
+```
+
+### Component responsibilities
+
+```mermaid
+classDiagram
+    direction LR
+
+    class ChatFrontend {
+        +submitQuestion(question, sessionId)
+        +uploadDocument(file)
+        +showAnswer(answer)
+    }
+
+    class FastAPI {
+        +prompt(request)
+        +pipeline(file)
+        +graphImport(csv)
+    }
+
+    class QueryRouter {
+        +classify(question)
+    }
+
+    class DocumentPipeline {
+        +uploadFile(file)
+        +extractText(file)
+        +cleanText(text)
+        +chunkText(text)
+        +embedAndIndex(chunks)
+    }
+
+    class DocumentRetriever {
+        +retrieveDocuments(question)
+    }
+
+    class GraphRetriever {
+        +findRelevantNodes(question)
+        +traverseRelationships(nodes)
+        +buildContext(nodes, relationships)
+    }
+
+    class AnswerGenerator {
+        +generate(question, context)
+    }
+
+    class Supabase {
+        +storeFile(file, metadata)
+        +saveChat(session, messages)
+    }
+
+    class Pinecone {
+        +upsertChunks(chunks)
+        +search(query)
+    }
+
+    class Neo4j {
+        +mergeEntities(records)
+        +mergeRelationships(records)
+        +searchGraph(question)
+    }
+
+    ChatFrontend --> FastAPI : HTTP requests
+    FastAPI --> QueryRouter : classify question
+    FastAPI --> DocumentPipeline : upload flow
+    DocumentPipeline --> Supabase : file + metadata
+    DocumentPipeline --> Pinecone : chunk vectors
+    FastAPI --> DocumentRetriever : document route
+    DocumentRetriever --> Pinecone : hybrid search
+    FastAPI --> GraphRetriever : graph route
+    GraphRetriever --> Neo4j : vector + graph traversal
+    FastAPI --> AnswerGenerator : question + context
+    AnswerGenerator --> FastAPI : generated answer
+    FastAPI --> Supabase : chat history
 ```
 
 ### Request and ingestion flows
