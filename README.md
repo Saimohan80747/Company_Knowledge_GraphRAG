@@ -37,47 +37,47 @@ first_rag_project/
 
 ## System design and architecture
 
+The application has two separate jobs: answer questions and add knowledge. The diagrams below show each flow independently; arrows indicate the direction of requests or data.
+
+### 1. Ask a question
+
 ```mermaid
-flowchart LR
-    U([Employee or intern]):::actor
-    HR([HR / knowledge maintainer]):::actor
+flowchart TB
+    USER([Employee or intern]):::actor
+    WEB["React chat interface"]:::client
+    API["FastAPI<br/>POST /prompt"]:::service
+    ROUTER{"Cohere query router"}:::decision
 
-    subgraph CLIENTS["Client applications"]
-        UI["React + Vite<br/>Chat interface"]:::client
-        CRUD["Streamlit<br/>CSV graph importer"]:::client
+    subgraph RETRIEVAL["Retrieve relevant company knowledge"]
+        DOCS["Document retrieval"]:::process
+        PINE[("Pinecone<br/>document chunks")]:::store
+        GRAPH["Knowledge-graph retrieval"]:::process
+        NEO[("Neo4j<br/>entities + relationships")]:::store
     end
 
-    subgraph SERVICES["Backend services"]
-        API["FastAPI<br/>REST API"]:::service
-        ROUTER{"Question<br/>router"}:::decision
-        INGEST["File pipeline<br/>extract → clean → chunk"]:::process
-        ANSWER["Cohere<br/>answer generation"]:::ai
-    end
+    CONTEXT["Selected context<br/>documents, graph, or both"]:::process
+    GENERATE["Cohere answer generation"]:::ai
+    CHAT[("Supabase<br/>chat sessions + messages")]:::store
 
-    subgraph STORES["Data services"]
-        SUPA[("Supabase<br/>files + chat history")]:::store
-        PINE[("Pinecone<br/>dense + sparse vectors")]:::store
-        NEO[("Neo4j<br/>company graph + vectors")]:::store
-    end
-
-    U --> UI
-    UI -->|"Questions / uploads"| API
-    API -->|"Answers / upload status"| UI
-    HR --> CRUD
-    CRUD -->|"CSV nodes + relationships"| API
+    USER -->|"asks question"| WEB
+    WEB -->|"question + session id"| API
     API --> ROUTER
-    ROUTER -->|"Document route"| PINE
-    ROUTER -->|"Graph route"| NEO
-    ROUTER -->|"Both"| PINE
-    ROUTER -->|"Both"| NEO
-    PINE -->|"Retrieved chunks"| ANSWER
-    NEO -->|"Nodes + relationship context"| ANSWER
-    ANSWER --> API
-    API -->|"Save / read chat"| SUPA
-    API -->|"Upload request"| INGEST
-    INGEST -->|"Store original + metadata"| SUPA
-    INGEST -->|"Upsert chunk vectors"| PINE
-    API -->|"Import graph records"| NEO
+    ROUTER -->|"document question"| DOCS
+    ROUTER -->|"company-relationship question"| GRAPH
+    ROUTER -->|"question needs both sources"| DOCS
+    ROUTER -->|"question needs both sources"| GRAPH
+    DOCS -->|"search"| PINE
+    PINE -->|"matching chunks"| DOCS
+    GRAPH -->|"vector search + traversal"| NEO
+    NEO -->|"matching nodes + links"| GRAPH
+    DOCS -->|"when selected"| CONTEXT
+    GRAPH -->|"when selected"| CONTEXT
+    CONTEXT --> GENERATE
+    API -->|"load prior chat where used"| CHAT
+    GENERATE -->|"answer"| API
+    API -->|"save question + answer"| CHAT
+    API -->|"answer"| WEB
+    WEB -->|"displays answer"| USER
 
     classDef actor fill:#fff3bf,stroke:#e67700,color:#5f3b00,stroke-width:2px
     classDef client fill:#d0ebff,stroke:#1971c2,color:#12344d,stroke-width:2px
@@ -86,12 +86,56 @@ flowchart LR
     classDef decision fill:#fff0f6,stroke:#c2255c,color:#601a36,stroke-width:2px
     classDef ai fill:#ffe8cc,stroke:#e8590c,color:#612b08,stroke-width:2px
     classDef store fill:#e6fcf5,stroke:#087f5b,color:#123c31,stroke-width:2px
-    style CLIENTS fill:#f8f9fa,stroke:#adb5bd,stroke-width:1px
-    style SERVICES fill:#f3f0ff,stroke:#9775fa,stroke-width:2px
-    style STORES fill:#e6fcf5,stroke:#38a169,stroke-width:2px
+    style RETRIEVAL fill:#f8f9fa,stroke:#adb5bd,stroke-width:2px
 ```
 
-The colors distinguish people, user interfaces, backend processes, AI generation, and persistent data stores. The diagram shows logical integrations; it does not imply that each service is deployed in a separate process.
+The router chooses document retrieval, graph retrieval, or both. Retrieved context is passed to Cohere to produce the answer. Supabase is used for chat persistence; Pinecone and Neo4j are separate retrieval stores.
+
+### 2. Add or update knowledge
+
+```mermaid
+flowchart LR
+    OWNER([Knowledge maintainer]):::actor
+    EMPLOYEE([Employee or intern]):::actor
+
+    subgraph DOCUMENT_FLOW["Document knowledge"]
+        FILE["PDF / DOCX / TXT / CSV / XLSX / ZIP"]:::input
+        UPLOAD["React upload → FastAPI /pipeline"]:::service
+        PROCESS["Duplicate check → extract → clean → chunk"]:::process
+        SUPABASE[("Supabase<br/>original file + metadata")]:::store
+        EMBED["Create dense + sparse vectors"]:::process
+        PINECONE[("Pinecone<br/>searchable document chunks")]:::store
+
+        EMPLOYEE --> FILE
+        FILE --> UPLOAD
+        UPLOAD --> PROCESS
+        PROCESS --> SUPABASE
+        PROCESS --> EMBED
+        EMBED --> PINECONE
+    end
+
+    subgraph GRAPH_FLOW["Structured company knowledge"]
+        CSV["Company CSV files"]:::input
+        IMPORT["Streamlit importer / FastAPI CSV endpoints"]:::service
+        LOAD["Create or update nodes and relationships"]:::process
+        NEO4J[("Neo4j<br/>company knowledge graph")]:::store
+
+        OWNER --> CSV
+        CSV --> IMPORT
+        IMPORT --> LOAD
+        LOAD --> NEO4J
+    end
+
+    classDef actor fill:#fff3bf,stroke:#e67700,color:#5f3b00,stroke-width:2px
+    classDef input fill:#d0ebff,stroke:#1971c2,color:#12344d,stroke-width:2px
+    classDef service fill:#d3f9d8,stroke:#2b8a3e,color:#173d20,stroke-width:2px
+    classDef process fill:#e5dbff,stroke:#7048e8,color:#30215e,stroke-width:2px
+    classDef store fill:#e6fcf5,stroke:#087f5b,color:#123c31,stroke-width:2px
+    style DOCUMENT_FLOW fill:#f1f8ff,stroke:#4dabf7,stroke-width:2px
+    style GRAPH_FLOW fill:#f3f0ff,stroke:#9775fa,stroke-width:2px
+```
+
+Uploading a document does not populate the Neo4j graph. Graph data is maintained through CSV imports; document chunks are indexed separately in Pinecone.
 
 ## Data flow diagrams (DFD)
 
