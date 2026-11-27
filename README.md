@@ -2,6 +2,10 @@
 
 A company knowledge assistant built with FastAPI, React/Vite, and Streamlit. Employees and interns can ask questions about company documents, policies, teams, people, and projects. The backend combines document retrieval with a Neo4j knowledge graph and uses Cohere to generate answers.
 
+## Research paper
+
+[Read the research paper](https://drive.google.com/file/d/1VaaaFgUY9IZW52n3ormaCemx8YvAp7Xc/view?usp=sharing)
+
 ## Features
 
 - Upload PDF, DOCX, TXT, CSV, XLSX, and ZIP files for document retrieval
@@ -216,123 +220,6 @@ flowchart TB
     classDef process fill:#d3f9d8,stroke:#2b8a3e,color:#173d20,stroke-width:2px
     classDef store fill:#e6fcf5,stroke:#087f5b,color:#123c31,stroke-width:2px
     style APP fill:#f8f9fa,stroke:#495057,stroke-width:2px
-```
-
-## UML diagrams
-
-### Question-answering sequence
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as Employee / intern
-    participant UI as React chat
-    participant API as FastAPI /prompt
-    participant Router as Cohere router
-    participant Pine as Pinecone
-    participant Neo as Neo4j
-    participant LLM as Cohere answer model
-    participant DB as Supabase chat store
-
-    rect rgb(230, 245, 255)
-        User->>UI: Ask company question
-        UI->>API: POST /prompt (question, session_id)
-        API->>Router: Classify retrieval route
-        Router-->>API: document_retrieval / knowledge_graph / both
-    end
-
-    alt Document retrieval or both
-        API->>Pine: Embed query and search dense + sparse vectors
-        Pine-->>API: Relevant document chunks and metadata
-    end
-
-    alt Knowledge graph or both
-        API->>Neo: Vector-search entities and traverse relationships
-        Neo-->>API: Relevant nodes and graph context
-    end
-
-    rect rgb(235, 255, 240)
-        API->>LLM: Question plus retrieved context
-        LLM-->>API: Generated answer
-        API->>DB: Save question and answer
-        DB-->>API: Session id
-        API-->>UI: Answer and session id
-        UI-->>User: Display answer
-    end
-```
-
-### Component responsibilities
-
-```mermaid
-classDiagram
-    direction LR
-
-    class ChatFrontend {
-        +submitQuestion(question, sessionId)
-        +uploadDocument(file)
-        +showAnswer(answer)
-    }
-
-    class FastAPI {
-        +prompt(request)
-        +pipeline(file)
-        +graphImport(csv)
-    }
-
-    class QueryRouter {
-        +classify(question)
-    }
-
-    class DocumentPipeline {
-        +uploadFile(file)
-        +extractText(file)
-        +cleanText(text)
-        +chunkText(text)
-        +embedAndIndex(chunks)
-    }
-
-    class DocumentRetriever {
-        +retrieveDocuments(question)
-    }
-
-    class GraphRetriever {
-        +findRelevantNodes(question)
-        +traverseRelationships(nodes)
-        +buildContext(nodes, relationships)
-    }
-
-    class AnswerGenerator {
-        +generate(question, context)
-    }
-
-    class Supabase {
-        +storeFile(file, metadata)
-        +saveChat(session, messages)
-    }
-
-    class Pinecone {
-        +upsertChunks(chunks)
-        +search(query)
-    }
-
-    class Neo4j {
-        +mergeEntities(records)
-        +mergeRelationships(records)
-        +searchGraph(question)
-    }
-
-    ChatFrontend --> FastAPI : HTTP requests
-    FastAPI --> QueryRouter : classify question
-    FastAPI --> DocumentPipeline : upload flow
-    DocumentPipeline --> Supabase : file + metadata
-    DocumentPipeline --> Pinecone : chunk vectors
-    FastAPI --> DocumentRetriever : document route
-    DocumentRetriever --> Pinecone : hybrid search
-    FastAPI --> GraphRetriever : graph route
-    GraphRetriever --> Neo4j : vector + graph traversal
-    FastAPI --> AnswerGenerator : question + context
-    AnswerGenerator --> FastAPI : generated answer
-    FastAPI --> Supabase : chat history
 ```
 
 ### Request and ingestion flows
