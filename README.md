@@ -1,4 +1,4 @@
-# Policy Expert RAG
+# Company Knowledge Graph RAG
 
 A document-question-answering application with a FastAPI backend and a React/Vite frontend. Upload a supported document, process it into the retrieval pipeline, and ask questions through the chat interface. Chat sessions and source-file actions are backed by Supabase, while the knowledge-graph flow uses Neo4j.
 
