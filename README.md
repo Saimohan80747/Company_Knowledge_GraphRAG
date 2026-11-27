@@ -1,15 +1,15 @@
 # Company Knowledge Graph RAG
 
-A document-question-answering application with a FastAPI backend and a React/Vite frontend. Upload a supported document, process it into the retrieval pipeline, and ask questions through the chat interface. Chat sessions and source-file actions are backed by Supabase, while the knowledge-graph flow uses Neo4j.
+A company knowledge assistant built with FastAPI, React/Vite, and Streamlit. Employees and interns can ask questions about company documents, policies, teams, people, and projects. The backend combines document retrieval with a Neo4j knowledge graph and uses Cohere to generate answers.
 
 ## Features
 
-- Upload PDF, DOCX, TXT, CSV, XLSX, and ZIP files
-- Process documents through the backend pipeline
-- Ask questions using retrieved document and knowledge-graph context
+- Upload PDF, DOCX, TXT, CSV, XLSX, and ZIP files for document retrieval
+- Ask questions using retrieved document context, company-graph context, or both
 - View and delete previous chat sessions
 - Preview and download source files
-- Expose the backend API through FastAPI's interactive documentation
+- Import company entities and relationships from CSV files into Neo4j
+- Explore the backend API through FastAPI's interactive documentation
 
 ## Project structure
 
@@ -17,23 +17,102 @@ A document-question-answering application with a FastAPI backend and a React/Vit
 first_rag_project/
 ├── backend/
 │   ├── api.py
-│   ├── chunking/
 │   ├── knowledge_graph/
 │   ├── supabase_/
+│   ├── chunking/
 │   ├── embeddings.py
 │   ├── file_reader.py
 │   ├── pipeline.py
 │   └── retrieve_docs.py
-├── frontend_crud/
-│   └── streamlit_app.py
-├── frontend/
+├── frontend_chatbot/
 │   ├── src/
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.js
+├── frontend_CRUD/
+│   └── streamlit_app.py
 ├── requirements.txt
 └── README.md
 ```
+
+## System design and architecture
+
+```mermaid
+flowchart LR
+    U[Employee or intern] --> UI[React and Vite chat]
+    UI --> API[FastAPI]
+    CRUD[Streamlit CSV importer] --> API
+
+    API --> ROUTER{Question router}
+    ROUTER -->|Document question| PINECONE[Pinecone hybrid retrieval]
+    ROUTER -->|Company entities or relationships| NEO4J[Neo4j graph and vector search]
+    ROUTER -->|Needs both| PINECONE
+    ROUTER -->|Needs both| NEO4J
+    PINECONE --> COHERE[Cohere answer generation]
+    NEO4J --> COHERE
+    COHERE --> API
+    API --> UI
+
+    API -->|POST /pipeline| INGEST[Extract, clean, and chunk]
+    INGEST --> STORAGE[Supabase Storage and document metadata]
+    INGEST --> PINECONE
+    API --> CHAT[Supabase chat sessions and messages]
+```
+
+### Request and ingestion flows
+
+- **Document ingestion:** `/pipeline` accepts a file. The backend checks for duplicate file content, stores new files and metadata in Supabase, extracts and cleans text, chunks it, and upserts dense and sparse vectors with source metadata into Pinecone.
+- **Question answering:** `/prompt` classifies a question as document retrieval, knowledge-graph lookup, or both. It retrieves the relevant context, sends it to Cohere, and saves the exchange in the Supabase chat history.
+- **Graph lookup:** Neo4j stores company nodes and relationships. The graph retrieval code uses vector similarity to select relevant nodes, traverses connected relationships, and returns graph context to the answer generator.
+- **Company-data import:** The Streamlit CRUD tool and CSV endpoints add or update graph nodes and relationships. Document uploads do **not** automatically extract and populate the company graph.
+- **Persistence:** Supabase stores uploaded files, document metadata, and chat data; Pinecone stores document-chunk vectors; Neo4j stores company entities, their embeddings, and relationships.
+
+## Company use cases
+
+- **Intern onboarding:** Ask where a team sits in the organization, who an intern reports to, which project a team works on, or where to find an onboarding or workplace policy. Graph questions depend on the corresponding current data having been imported; policy details can also be retrieved from uploaded documents.
+- **Employee self-service:** Find policy guidance, understand team and department structure, identify project owners or reporting relationships, and ask questions that combine structured company information with details in documents.
+- **HR and knowledge maintainers:** Import or refresh employee, intern, department, project, team, and policy records and their relationships using the CSV import endpoints.
+
+Answers are only as current and complete as the documents and graph data supplied to the system. Company data may contain sensitive personal information; only use appropriately authorized data and protect the configured services and credentials.
+
+## Dynamic knowledge graph
+
+The graph represents company information as **nodes** (such as `Employee`, `Intern`, `Department`, `Team`, `Project`, and `Policy`) connected by typed **relationships** (such as `REPORTS_TO`, `HAS_EMPLOYEE`, `WORKS_ON`, and `PREPARED_BY`). The loader uses Neo4j `MERGE` operations keyed by entity name, so re-importing a row updates that node's properties rather than creating another node with the same name. Relationship imports likewise use `MERGE` to avoid duplicate relationships of the same type between matched nodes.
+
+This makes the graph maintainable as company data changes: maintainers can import updated CSV records and new links, and graph retrieval can use those connections when answering questions. It is not an automatic synchronization system: someone must provide and import the changed data, and relationship imports require the referenced nodes to exist.
+
+## Version control and data history
+
+Git versions this repository's source code and documentation. The current Neo4j loader does **not** version company knowledge: it uses `MERGE` keyed by entity name and then `SET`s properties on that same node. A later CSV import therefore replaces the current property values; it does not preserve the old values, identify who changed them, or allow an as-of query or rollback. Relationship imports also merge links into the graph but do not record when a link became valid or ended.
+
+To make the graph control previous and new knowledge versions, versioning must be added to the data model and import workflow. A recommended approach is:
+
+1. Assign each import a unique `source_version` (such as a dataset release ID), an import timestamp, and source metadata. Keep the source CSV or snapshot so the import can be audited.
+2. Preserve each prior entity and relationship state as an immutable version instead of overwriting it. Record validity metadata such as `valid_from`, `valid_to`, and `is_current`, or store versioned snapshots/events. On a changed record, close the previous version and create a new current version; unchanged records should not produce unnecessary revisions.
+3. Apply an import as a validated batch. Check required fields, stable entity identifiers, and relationship endpoints before activating the new version. Keep an audit record of the source version and import outcome so a failed import cannot silently become the current state.
+4. Make retrieval explicitly choose either the current version or a requested historical point in time. Version relationships as well as nodes so historical queries do not combine current links with old entity properties.
+5. Support rollback by activating a previous snapshot/version, and verify it with tests for updates, unchanged records, new entities, removed entities/relationships, failed imports, current-state queries, and as-of queries.
+
+These are recommended design requirements, **not implemented features** in this repository. For now, protect the source CSVs, record release/import details outside the graph, and back up/export Neo4j before important imports. Supabase file storage and Pinecone's vector index do not themselves provide graph-history or rollback semantics.
+
+## Evaluations
+
+There is no automated evaluation dataset or benchmark command in the repository at present. Before deployment or changes to retrieval, prompts, or graph data, build a small, approved test set from representative company questions. For each question, record the expected answer and the source document passage or graph entities/relationships that support it. Use anonymized or synthetic examples unless access to real company data is authorized.
+
+The scores below are **randomly chosen placeholders for demonstration only**. They are not measurements, results, or claims about this project. Replace them with benchmark results before using this table to compare system performance.
+
+Compare the requested approaches on the **same held-out questions and source data**. Use answer accuracy (correct answers divided by total questions) for an end-to-end comparison, and record retrieval/routing metrics to explain failures:
+
+| Approach | What it evaluates | Recommended additional metric | Illustrative accuracy |
+| --- | --- | --- | --- |
+| Dense-index vanilla RAG | Dense document retrieval followed by answer generation | Supporting-chunk Recall@k | 76% |
+| Hybrid-index vanilla RAG | Dense + sparse document retrieval followed by answer generation | Supporting-chunk Recall@k | 84% |
+| Knowledge graph | Graph node/relationship retrieval followed by answer generation | Expected entity and relationship-path recall | 79% |
+| Router (vanilla RAG + graph) | Route selection and end-to-end answering using the selected source or both | Route accuracy, alongside answer accuracy | 88% |
+
+The repository contains no benchmark questions, expected answers, or recorded evaluation results, so these numbers must not be interpreted as measured accuracy. Replace the placeholders only after running the approaches against the same labeled test set; include the test-set size, date, retrieval `k`, model/configuration, and scoring rubric with the results. Grade correctness against an expected answer and verify factual claims against retrieved sources; report groundedness and latency separately rather than presenting them as answer accuracy.
+
+Include questions about policies, onboarding, departments, reporting lines, projects, and questions that require combining documents with graph data. Review failures for missing or stale source data, incorrect routing, retrieval misses, and unsupported answers; re-run the same set after changes. These are recommended evaluation practices, not reported project scores.
 
 ## Prerequisites
 
@@ -84,7 +163,7 @@ Create `backend\.env` from the example file:
 Copy-Item backend\.env.example backend\.env
 ```
 
-Open `backend\.env` and provide values for all of the following variables:
+Open `backend\.env` and provide credentials for the connected services:
 
 ```dotenv
 COHERE_API_KEY=your_cohere_api_key
@@ -96,14 +175,14 @@ NEO4J_USER=neo4j
 NEO4J_PASSWORD=your_neo4j_password
 ```
 
-Keep `backend\.env` private. It is ignored by Git. The backend loads this file when it starts, and it verifies the Neo4j connection during startup.
+The backend also supports optional configuration for model names, Pinecone index and namespace, Neo4j vector search, chunking, retrieval limits, and allowed CORS origins. See `backend\config.py` for defaults and environment variable names. Keep `backend\.env` private. The backend loads it on startup and verifies the Neo4j connection.
 
 ### 5. Install frontend dependencies
 
 In a new terminal, from the repository root:
 
 ```powershell
-cd frontend
+cd frontend_chatbot
 npm install
 ```
 
@@ -121,16 +200,16 @@ python -m uvicorn api:app --reload
 
 The API is available at `http://127.0.0.1:8000`. Open `http://127.0.0.1:8000/docs` to view the Swagger UI.
 
-### Terminal 2: start the frontend
+### Terminal 2: start the chat frontend
 
 ```powershell
-cd frontend
+cd frontend_chatbot
 npm run dev
 ```
 
 Open the URL printed by Vite, usually `http://localhost:5173`.
 
-The frontend is configured to call the backend at `http://127.0.0.1:8000`. If the backend runs on a different host or port, update `BASE_URL` in `frontend\src\api.js`.
+The frontend is configured to call the backend at `http://127.0.0.1:8000`. If the backend runs on a different host or port, update `BASE_URL` in `frontend_chatbot\src\api.js`.
 
 ## API endpoints
 
@@ -146,21 +225,30 @@ The frontend is configured to call the backend at `http://127.0.0.1:8000`. If th
 | `GET` | `/download/{file_name}` | Download a source file |
 | `GET` | `/preview/{file_name}` | Preview a source file |
 | `DELETE` | `/delete-document/{file_name}` | Delete a source document |
-| `POST` | `/graph/nodes` | Create a node |
-| `POST` | `/graph/relationships` | Create a relationship |
+| `POST` | `/nodes/employee` | Import employee nodes from CSV |
+| `POST` | `/nodes/intern` | Import intern nodes from CSV |
+| `POST` | `/nodes/department` | Import department nodes from CSV |
+| `POST` | `/nodes/subdepartment` | Import subdepartment nodes from CSV |
+| `POST` | `/nodes/team` | Import team nodes from CSV |
+| `POST` | `/nodes/project` | Import project nodes from CSV |
+| `POST` | `/nodes/policy` | Import policy nodes from CSV |
+| `POST` | `/relationships/department-subdepartment` | Import department-to-subdepartment links from CSV |
+| `POST` | `/relationships/subdepartment-team` | Import subdepartment-to-team links from CSV |
+| `POST` | `/relationships/team-employee` | Import team-to-employee links from CSV |
+| `POST` | `/relationships/employee-employee` | Import employee reporting links from CSV |
+| `POST` | `/relationships/intern-employee` | Import intern reporting links from CSV |
+| `POST` | `/relationships/policy-employee` | Import policy-owner links from CSV |
+| `POST` | `/relationships/teammate` | Import teammate links from CSV |
+| `POST` | `/relationships/team-project` | Import team-to-project links from CSV |
 
-### Graph create frontend
-
-Start the API from `backend`, then run the Streamlit editor from the repository root:
+### Optional: start the CSV graph importer
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-streamlit run frontend_crud\streamlit_app.py
+streamlit run frontend_CRUD\streamlit_app.py
 ```
 
-The frontend defaults to `http://127.0.0.1:8000`; set `GRAPH_API_URL` to use another API URL.
-Node properties are entered as JSON and must include `name`. Relationships use the names of
-existing nodes and the relationship types defined by `loader.py`.
+Start the API first. The importer calls the graph CSV endpoints on the API.
 
 ## Troubleshooting
 
